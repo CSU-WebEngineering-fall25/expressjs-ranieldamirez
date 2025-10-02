@@ -10,19 +10,16 @@ const errorHandler = require('./middleware/errorHandler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// TODO: Implement stats tracking object
 let stats = {
   totalRequests: 0,
   endpointStats: {},
   startTime: Date.now()
 };
 
-// Security and parsing middleware
 app.use(helmet());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, '../public')));
 
-// Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -30,13 +27,22 @@ const limiter = rateLimit({
 });
 app.use('/api', limiter);
 
-// Custom middleware
 app.use(loggingMiddleware);
 
-// TODO: Add middleware to track request statistics
-// Hint: Increment totalRequests and track endpoint usage
+app.use((req, res, next) => {
+  stats.totalRequests += 1;
+  res.on('finish', () => {
+    const key = `${req.method} ${req.originalUrl.split('?')[0]}`;
+    if (!stats.endpointStats[key]) {
+      stats.endpointStats[key] = 0;
+    }
+    stats.endpointStats[key] += 1;
+  });
+  next();
+});
 
-// Routes
+app.options('/api/*', (req, res) => res.sendStatus(204));
+
 app.use('/api/comics', comicsRouter);
 
 app.get('/api/health', (req, res) => {
@@ -47,13 +53,14 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// TODO: Implement /api/stats endpoint
 app.get('/api/stats', (req, res) => {
-  // Return stats object with totalRequests, endpointStats, and uptime
-  res.status(501).json({ error: 'Not implemented' });
+  res.json({
+    totalRequests: stats.totalRequests,
+    endpointStats: stats.endpointStats,
+    uptime: process.uptime()
+  });
 });
 
-// 404 handler for API routes
 app.all('/api/*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
@@ -61,7 +68,13 @@ app.all('/api/*', (req, res) => {
   });
 });
 
-// Error handling middleware (must be last)
+app.use((err, req, res, next) => {
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ error: 'Invalid JSON payload' });
+  }
+  next(err);
+});
+
 app.use(errorHandler);
 
 if (require.main === module) {
